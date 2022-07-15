@@ -165,7 +165,7 @@ namespace FieldWalker
                     Console.WriteLine("-c - if using '-t' or '-l', also target the localhost");
                     Console.WriteLine("-t - remote host to target (incompatible with '-l')");
                     Console.WriteLine("-l - comma-separated list of remote hosts to target (incompatible with '-t')");
-                    Console.WriteLine("-o - output directory for writing .ppk and id_rsa files");
+                    Console.WriteLine("-o - output directory for writing .ppk and id_rsa files (default: .\");
                     Console.WriteLine("-v - generate more output");
                     Console.WriteLine("-d - generate a lot of debugging output");
                 }
