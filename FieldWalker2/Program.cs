@@ -15,6 +15,17 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEAL
 
  */
 
+/* 
+ * FieldWalker was inspired by Arvanaghi's SessionGopher
+ * 
+ * Special thanks to thund3rstruck (https://www.codeproject.com/script/Membership/View.aspx?mid=2425996) for providing
+ * good examples of how to use WMI in C#.
+ * 
+ * Also, a shoutout to Matt Grandy at 40N, as I spent a lot of time looking at his CIMplant code while building out some
+ * of the functionality here.
+ * 
+ */
+
 using System;
 using System.Management;
 using System.Text;
@@ -165,7 +176,7 @@ namespace FieldWalker
                     Console.WriteLine("-c - if using '-t' or '-l', also target the localhost");
                     Console.WriteLine("-t - remote host to target (incompatible with '-l')");
                     Console.WriteLine("-l - comma-separated list of remote hosts to target (incompatible with '-t')");
-                    Console.WriteLine("-o - output directory for writing .ppk and id_rsa files (default: .\");
+                    Console.WriteLine("-o - output directory for writing .ppk and id_rsa files (default: .\\ ");
                     Console.WriteLine("-v - generate more output");
                     Console.WriteLine("-d - generate a lot of debugging output");
                 }
@@ -252,8 +263,10 @@ namespace FieldWalker
                 }
                 // end debug #WMITEST
                   */
-                
+
+
                 //build a connection for interacting with the registry
+
                 ManagementScope registryScope = new ManagementScope(@"\\" + target + @"\root\DEFAULT:StdRegProv", options);
                 registryScope.Connect();
 
@@ -500,6 +513,11 @@ namespace FieldWalker
                     string FileZillaPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\FileZilla\\sitemanager.xml";
                     string SuperPuTTYPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\Documents\\SuperPuTTY\\Sessions.xml";
                     string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
+                    //There's six different unattend.xml files
+                    string[] unattends = { "C:\\Windows\\Panther\\unattend.xml", "C:\\Windows\\Panther\\unattended.xml", "C:\\Windows\\Panther\\unattend\\unattend.xml",
+                    "C:\\Windows\\Panther\\unattend\\unattended.xml", "C:\\Windows\\System32\\SysPrep\\unattend.xml", "C:\\Windows\\System32\\SysPrep\\Panther\\unattend.xml"};
+                    
+
                     //debug 
                     Console.WriteLine("FileZilla path: " + FileZillaPath);
                     Console.WriteLine("SuperPuTTY Path: " + SuperPuTTYPath);
@@ -523,6 +541,15 @@ namespace FieldWalker
                         XElement mRemoteNGServers = XElement.Load(mRemoteNGPath);
                         userSessions[numUsers].sessions.AddRange(processLocalMRemoteNGSessions(mRemoteNGServers));
                     }// end if (File.Exists(mRemoteNGPath))
+                    
+                    foreach( string unattendedFile in unattends)
+                    {
+                        if (File.Exists(unattendedFile))
+                        {
+                            userSessions[numUsers].sessions.AddRange(processLocalUnattendFiles(XElement.Load(unattendedFile), "localhost", unattendedFile, debug));
+                        }
+
+                    }//end foreach( string unattendedFile in unattends)
                     numUsers++;
                 }// end if (userHive.StartsWith("S -1-5-21")
             }// end foreach (string userHive in users)

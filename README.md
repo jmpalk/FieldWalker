@@ -31,6 +31,8 @@ Flags:
 ## ToDo
 + Automatically decrypt mRemoteNG credentials
 + Search for VNC credentials
++ Retrieve credentials from `sysprep.inf` files
 + Add "Find interesting files" functionality to search more broadly for files containing keywords
 + Add CIM support
+
 
