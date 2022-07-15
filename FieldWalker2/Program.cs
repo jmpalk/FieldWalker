@@ -53,6 +53,12 @@ namespace FieldWalker
         {
             return "==> Source: " + source + " remoteHost: " + remoteHost + " port: " + port + " username: " + username + " password: " + password + " PKF: " + pvtKeyFile;
         }
+
+        public string ToCsv()
+        {
+            return $"{source}, {remoteHost}, {port}, {username}, {password}, {pvtKeyFile}";
+
+        }
         public session(string remoteHost, string port, string username, string password, string pvtKeyFile, string source)
         {
             this.remoteHost = remoteHost;
@@ -578,7 +584,7 @@ namespace FieldWalker
             }//end foreach( string unattendedFile in unattends)
 
             //open an output file
-            string finalOutputFileName = outputDirectory + @"\results.txt";
+            string finalOutputFileName = outputDirectory + @"\results.csv";
             
 
             Console.WriteLine($"-> Writing results to {finalOutputFileName}");
@@ -586,6 +592,7 @@ namespace FieldWalker
             Console.WriteLine("-> Final Results");
 
             var outputLines = new List<string>();
+            outputLines.Add("Source, Remote Host, Port, Username, Password, Private Key File");
 
             foreach (UserSessions user in userSessions)
             {
@@ -596,7 +603,7 @@ namespace FieldWalker
                 foreach (session connection in user.sessions)
                 {
                     Console.WriteLine(connection.ToString());
-                    outputLines.Add(connection.ToString());
+                    outputLines.Add(connection.ToCsv());
                 }
             }
             File.WriteAllLines(finalOutputFileName, outputLines.ToArray());
