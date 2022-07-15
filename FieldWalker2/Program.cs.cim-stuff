@@ -1,0 +1,965 @@
+﻿/* Copyright 2022, Justin Palk
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation 
+files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, 
+modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the 
+Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the 
+Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE 
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR 
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, 
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+ */
+
+using System;
+using System.Management;
+using System.Text;
+using System.Security;
+using System.Security.Principal;
+using System.IO;
+using Microsoft.Win32;
+using System.Text.RegularExpressions;
+using System.Linq;
+using System.Xml.Linq;
+using System.Collections.Generic;
+using Microsoft.Management.Infrastructure;
+using Microsoft.Management.Infrastructure.Options;
+
+
+
+namespace FieldWalker
+{
+
+    public class session
+    {
+        public string remoteHost;
+        public string port;
+        public string username;
+        public string password;
+        public string pvtKeyFile;
+        public string source;
+
+        public override string ToString()
+        {
+            return "==> Source: " + source + " remoteHost: " + remoteHost + " port: " + port + " username: " + username + " password: " + password + " PKF: " + pvtKeyFile;
+        }
+        public session(string remoteHost, string port, string username, string password, string pvtKeyFile, string source)
+        {
+            this.remoteHost = remoteHost;
+            this.port = port;
+            this.username = username;
+            this.password = password;
+            this.pvtKeyFile = pvtKeyFile;
+            this.source = source;
+        }// end public session(string remoteHost...
+    }// end public class session
+    public class UserSessions
+    {
+        string sid;
+        public string username;
+        public List<session> sessions;
+
+        public UserSessions(string sid, string username)
+        {
+            this.sid = sid;
+            this.username = username;
+            this.sessions = new List<session>();
+        }
+    }// end public static class UserSessions
+
+
+    public class stringSecurer
+    {
+        public SecureString MakeSecureString(string password)
+        {
+            SecureString secureString = new SecureString();
+            if (string.IsNullOrEmpty(password))
+            {
+                return null;
+            }
+            foreach (char c in password)
+            {
+                
+                secureString.AppendChar(c);
+            }
+            return secureString;
+        }
+
+    }
+
+    public class winScpDecryption
+    {
+        public string remainingCipherText;
+        public uint decryptedResult;
+
+        public winScpDecryption(string remainingCipherText, uint decryptedResult)
+        {
+
+            this.remainingCipherText = remainingCipherText;
+            this.decryptedResult = decryptedResult;
+
+        } // end public winScpDecryption(string remainingCipherText, uint decryptedResult)
+
+    }// end public class winScpDecryption
+
+    internal class Program
+    {
+
+        public static string Namespace = @"root\cimv2";
+
+        static void Main(string[] args)
+        {
+
+            const string puttyPathEnding = @"\SOFTWARE\SimonTatham\PuTTY\Sessions";
+            const string winSCPPathEnding = @"\SOFTWARE\Martin Prikryl\WinSCP 2\Sessions";
+            const string rdpPathEnding = @"\SOFTWARE\Microsoft\Terminal Server Client\Servers";
+
+            List<UserSessions> userSessions = new List<UserSessions>();
+
+            //variables for command-line arguments
+            string computersList = "";
+            string target = "";
+            string remotingUsername = "";
+            string remotingPassword = "";
+            string remotingDomain = "";
+            string outputDirectory = ".\\";
+            Boolean full = false;
+            string previousArgument = "";
+            int numUsers = 0;
+
+            foreach (string arg in args)
+            {
+                if (arg == "-d")
+                {
+                    previousArgument = "-d";
+                }
+                else if (arg == "-u")
+                {
+                    previousArgument = "-u";
+                }
+                else if (arg == "-p")
+                {
+                    previousArgument = "-p";
+                }
+                else if (arg == "-l")
+                {
+                    previousArgument = "-l";
+                }
+                else if (arg == "-t")
+                {
+                    previousArgument = "-t";
+                }
+                else if (arg == "-n")
+                {
+                    previousArgument = "-n";
+                }
+                else if (arg == "-o")
+                {
+                    //
+                }
+                else if (arg == "-f")
+                {
+                    full = true;
+                }
+                else
+                {
+                    if (previousArgument == "-d")
+                    {
+                        outputDirectory = arg;
+                        previousArgument = "";
+                    }
+                    else if (previousArgument == "-u")
+                    {
+                        remotingUsername = arg;
+                        previousArgument = "";
+                    }
+                    else if (previousArgument == "-p")
+                    {
+                        remotingPassword = arg;
+                        previousArgument = "";
+                    }
+                    else if (previousArgument == "-l")
+                    {
+                        computersList = arg;
+                        previousArgument = "";
+                    }
+                    else if (previousArgument == "-t")
+                    {
+                        target = arg;
+                        previousArgument = "";
+                        Console.WriteLine(">>> target: " + target);
+                    }
+                    else if (previousArgument == "-n")
+                    {
+                        remotingDomain = arg;
+                        previousArgument = "";
+                    }
+                    else
+                    {
+                        Console.WriteLine("Argument '" + arg + "' is unrecognized.");
+                        return;
+                    }// end if(previousArgument == "-d")
+                }// end if(arg == "-d")
+            }//end foreach (string arg in args)
+
+            //if the user supplied a target or target list, run FieldWalker remotely
+            if ((target != "") || (computersList != ""))
+            {
+
+                ConnectionOptions options;
+
+                //if the user supplied credentials, configure the WMI connection to use them              
+                if ((remotingUsername != "") && (remotingPassword != ""))
+                {
+                    options = new ConnectionOptions("MS_409", remotingUsername, remotingPassword,
+                        "ntlmdomain:"+remotingDomain, System.Management.ImpersonationLevel.Impersonate,
+                        System.Management.AuthenticationLevel.Default, true, null,
+                        System.TimeSpan.MaxValue);
+                }
+                // If the user didn't supply credentials, we'll attempt the connection in the
+                // current user context
+                else
+                {
+                    options = new ConnectionOptions();
+                }
+
+                
+                //debug #WMITEST -- this block is just for testing WMI connection
+                //ManagementScope scope = new ManagementScope(@"\\" + target + @"\root\cimv2", options);
+                string remoteTarget = @"\\" + target;
+                Console.WriteLine("remoteTarget: " + remoteTarget);
+                ManagementScope scope = new ManagementScope(remoteTarget);
+                scope.Connect();
+                ObjectQuery query = new ObjectQuery("SELECT * FROM Win32_OperatingSystem");
+                ManagementObjectSearcher searcher = new ManagementObjectSearcher(scope, query);
+
+
+                ManagementObjectCollection queryCollection = searcher.Get();
+                foreach (ManagementObject m in queryCollection)
+                {
+                    Console.WriteLine("Computer Name: {0}", m["csname"]);
+                    Console.WriteLine("Windows Directory: {0}", m["WindowsDirectory"]);
+                    Console.WriteLine("Windows OS: {0}", m["Caption"]);
+                    Console.WriteLine("Version: {0}", m["Version"]);
+                    Console.WriteLine("Mfgr: {0}", m["Manufacturer"]);
+                }
+                // end debug #WMITEST
+                
+
+                // debug #CIMTEST
+
+                WSManSessionOptions cimSessionOptions = new WSManSessionOptions();
+                CimSession activeCimSession;
+
+                String cimTarget;
+                String cimUsername;
+                stringSecurer cimStringSecurer = new stringSecurer();
+                SecureString cimPassword;
+                if (target == null || target == "")
+                {
+                    cimTarget = "localahost";
+                }
+                else
+                {
+                    cimTarget = target;
+                }
+
+                if (remotingUsername == null || remotingUsername == "")
+                {
+                    cimUsername = Environment.UserName;
+                }
+                else
+                {
+                    cimUsername = remotingUsername;
+                }
+
+                cimPassword = cimStringSecurer.MakeSecureString(remotingPassword);
+
+                if (!string.IsNullOrEmpty(cimPassword?.ToString()))
+                {
+                    //cimPassword = cimStringSecurer.MakeSecureString(remotingPassword);
+                    Console.WriteLine("### Preparing to connect to " + cimTarget + " with credentials: " + remotingDomain + "\\" + cimUsername + "::" + remotingPassword + " ###" + " cP: " + cimPassword?.ToString() + " ***");
+                    CimCredential credentials = new CimCredential(PasswordAuthenticationMechanism.Default, remotingDomain, cimUsername, cimPassword);
+                    Console.WriteLine("### Created credentials ###");
+                    cimSessionOptions.AddDestinationCredentials(credentials);
+                    cimSessionOptions.MaxEnvelopeSize = 256000;
+                    Console.WriteLine("### Connecting to " + cimTarget + " ###");
+                    activeCimSession = CimSession.Create(cimTarget, cimSessionOptions);
+                    Console.WriteLine("### Connection Created ###");
+                }
+                else
+                {
+                    DComSessionOptions dcomOptions = new DComSessionOptions { Impersonation = ImpersonationType.Impersonate };
+                    activeCimSession = CimSession.Create(cimTarget, dcomOptions);
+                }
+
+                Console.WriteLine("### Testing CIM Connection ###");
+                if (!activeCimSession.TestConnection(out _, out _))
+                {
+                    Console.WriteLine("Error Establishing Cim Connection to " + cimTarget);
+                }
+                Console.WriteLine("### CIM Connection Established ###");
+
+
+
+                // end debug #CIMTEST
+
+
+                //build a connection for interacting with the registry
+                ManagementScope registryScope = new ManagementScope(@"\\" + target + @"\root\DEFAULT:StdRegProv", options);
+                registryScope.Connect();
+
+                Console.WriteLine("FieldWalking " + target);
+
+                ManagementClass registryManipulator = new ManagementClass(registryScope,
+                    new ManagementPath("DEFAULT:StdRegProv"), new ObjectGetOptions());
+                ManagementBaseObject methodParams = registryManipulator.GetMethodParameters("EnumKey");
+
+                methodParams["hDefKey"] = 2147483651;
+                methodParams["sSubKeyName"] = "";
+
+                ManagementBaseObject exitCode = registryManipulator.InvokeMethod("EnumKey",
+                    methodParams, null);
+
+                string[] remoteUsers = (string[])exitCode["sNames"];
+
+                foreach (string user in remoteUsers)
+                {
+                    if (Regex.Match(user, @"^S-1-5-21-[\d\-]+$", RegexOptions.ECMAScript).Success)
+                    {
+                        Console.WriteLine("User on " + target + ": " + user);
+                        //get the username from the SID
+                        string accountName = new SecurityIdentifier(user).Translate(typeof(NTAccount)).ToString();
+
+                        //add a UserSessions object to the list
+                        userSessions.Add(new UserSessions(user, accountName));
+
+                        //look for WinSCP Sessions                        
+                        userSessions[numUsers].sessions.AddRange(
+                                processRemoteWinSCPSessions(registryManipulator, methodParams, user));
+
+                        //look for PuTTY Sessions
+                        userSessions[numUsers].sessions.AddRange(
+                            processRemotePuttySessions(registryManipulator, methodParams, user));
+
+                        //look for RDP sessions
+                        userSessions[numUsers].sessions.AddRange(
+                           processRemoteRdpSessions(registryManipulator, methodParams, user));
+
+                        //generate file paths for remote files 
+                        //now we look for file-based credentials
+                        string FileZillaPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\FileZilla\\sitemanager.xml";
+                        string SuperPuTTYPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\Documents\\SuperPuTTY\\Sessions.xml";
+                        string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
+
+                        //look for remote FileZillaSessions
+                        if (cimCheckForFile(FileZillaPath, activeCimSession)){
+
+                            XElement fileZillaSettings = XElement.Parse(Encoding.Default.GetString(cimReadRemoteFile(FileZillaPath, activeCimSession)));
+                            userSessions[numUsers].sessions.AddRange(processLocalFileZillaSessions(fileZillaSettings));
+                                                      
+                        }
+
+                        //look for remote MRemoteNG Sessions
+                        // userSessions[numUsers].sessions.AddRange(processRemoteMRemoteNGSessions(activeCimSession, mRemoteNGPath));
+
+                        //look for remote SuperPuTTY Sessions
+                        // userSessions[numUsers].sessions.AddRange(processRemoteSuperPuttySessions(activeCimSession, SuperPuTTYPath));
+
+
+                    }// end if(Regex.Match(user, @"^S-1-5-21-[\d\-]+$", RegexOptions.ECMAScript).Success)
+
+                }//end foreach (string user in remoteUsers)
+
+            }
+
+            //Run FieldWalker locally
+            Console.WriteLine("Running FieldWalker on the local host");
+            RegistryKey hku = Registry.Users;
+            RegistryKey hklm = Registry.LocalMachine;
+            numUsers = 0;
+
+            string[] users = hku.GetSubKeyNames();
+
+
+            foreach (string userHive in users)
+            {
+                if (Regex.Match(userHive, @"^S-1-5-21-[\d\-]+$", RegexOptions.ECMAScript).Success)
+                {
+
+                    //get the username from the SID
+                    string accountName = new SecurityIdentifier(userHive).Translate(typeof(NTAccount)).ToString();
+
+                    //create a new userSessions object                    
+                    userSessions.Add(new UserSessions(userHive, accountName));
+
+                    // we start by looking for credentials in the registry
+                    // look for putty sessions
+                    using (RegistryKey puttyKey = hku.OpenSubKey(userHive + puttyPathEnding))
+                    {
+                        if (puttyKey != null)
+                        {
+                            userSessions[numUsers].sessions.AddRange(processLocalPuttySessions(puttyKey));
+                        }
+
+                    }
+                    //debug
+                    //Console.WriteLine("PuTTY");
+                    //Console.WriteLine("# of userSessions.sessions: " + userSessions[numUsers].sessions.Count.ToString());
+                    // look for local winSCP sessions
+                    using (RegistryKey winSCPKey = hku.OpenSubKey(userHive + winSCPPathEnding))
+                    {
+                        if (winSCPKey != null)
+                        {
+                            userSessions[numUsers].sessions.AddRange(processLocalWinScpSessions(winSCPKey));
+                        }
+                    }
+                    //debug
+                    // Console.WriteLine("WinSCP");
+                    //Console.WriteLine("# of userSessions.sessions: " + userSessions[numUsers].sessions.Count.ToString());
+                    //look for local RDP sessions
+                    using (RegistryKey rdpKey = hku.OpenSubKey(userHive + rdpPathEnding))
+                    {
+                        if (rdpKey != null)
+                        {
+                            userSessions[numUsers].sessions.AddRange(processLocalRdpSessions(rdpKey));
+                        }
+                    }
+                    //debug
+                    // Console.WriteLine("RDP");
+                    // Console.WriteLine("# of userSessions.sessions: " + userSessions[numUsers].sessions.Count.ToString());
+
+                    //now we look for file-based credentials
+                    string FileZillaPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\FileZilla\\sitemanager.xml";
+                    string SuperPuTTYPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\Documents\\SuperPuTTY\\Sessions.xml";
+                    string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
+                    //debug 
+                    Console.WriteLine("FileZilla path: " + FileZillaPath);
+                    Console.WriteLine("SuperPuTTY Path: " + SuperPuTTYPath);
+                    if (File.Exists(FileZillaPath))
+                    {
+                        //debug
+                        Console.WriteLine("FileZilla sessions file found");
+                        XElement fileZillaSettings = XElement.Load(FileZillaPath);
+                        userSessions[numUsers].sessions.AddRange(processLocalFileZillaSessions(fileZillaSettings));
+                    }// end if (File.Exists(FileZillaPath))
+
+                    if (File.Exists(SuperPuTTYPath))
+                    {
+                        //debug
+                        Console.WriteLine("SuperPuTTY sessions file found");
+                        XElement SuperPuTTYServers = XElement.Load(SuperPuTTYPath);
+                        userSessions[numUsers].sessions.AddRange(processLocalSuperPuttySessions(SuperPuTTYServers));
+                    }// end if (File.Exists(SuperPuTTYPath))
+                    if (File.Exists(mRemoteNGPath))
+                    {
+                        XElement mRemoteNGServers = XElement.Load(mRemoteNGPath);
+                        userSessions[numUsers].sessions.AddRange(processLocalMRemoteNGSessions(mRemoteNGServers));
+                    }// end if (File.Exists(mRemoteNGPath))
+                    numUsers++;
+                }// end if (userHive.StartsWith("S -1-5-21")
+            }// end foreach (string userHive in users)
+
+            foreach (UserSessions user in userSessions)
+            {
+                Console.WriteLine("OUTPUT");
+                Console.WriteLine(">>> " + user.username);
+
+                foreach (session connection in user.sessions)
+                {
+                    Console.WriteLine(connection.ToString());
+                }
+            }
+            Console.WriteLine("End");
+
+        }// end static void Main(string[] args)
+
+
+        //The following was adapted froim CIMplant's 'checkForFile' function https://github.com/FortyNorthSecurity/CIMplant/blob/main/CIMplant/ExecuteCIM.cs
+        static Boolean cimCheckForFile(string path, CimSession cimSession)
+        {
+
+            string newPath = path.Replace("\\", "\\\\");
+            string query = $"SELECT * FROM CIM_DataFile Where Name='{path}' ";
+            IEnumerable<CimInstance> queryInstance = cimSession.QueryInstances(Namespace, "WQL", query);
+            IEnumerable<CimInstance> cimInstances = queryInstance as CimInstance[] ?? queryInstance.ToArray();
+
+            if (!cimInstances.Any())
+            {
+                Console.WriteLine("### Remote file '" + path + "' not found. ###");
+                return false;
+            }
+            if (Convert.ToInt32(cimInstances.First().CimInstanceProperties["FileSize"].Value) == 0)
+            {
+                Console.WriteLine("### Remote file '" + path + "' exists, but has no content (zero bytes). ###");
+                return false;
+            }
+
+            return true;
+        }// end public bool cimCheckForFile(string path, CimSession cimSession)
+
+
+        //The following was adapted froim CIMplant's 'cat' function https://github.com/FortyNorthSecurity/CIMplant/blob/main/CIMplant/ExecuteCIM.cs
+        static Byte[] cimReadRemoteFile(string path, CimSession cimSession)
+        {
+
+            if (!cimCheckForFile(path, cimSession))
+            {
+                return null;
+            }
+
+            CimInstance baseInstance = new CimInstance("PS_ModuleFile");
+            baseInstance.CimInstanceProperties.Add(CimProperty.Create("InstanceID", path, CimFlags.Key));
+            CimInstance modifiedInstance = cimSession.GetInstance("ROOT/Microsoft/Windows/Powershellv3", baseInstance);
+
+            System.Byte[] fileBytes = (byte[])modifiedInstance.CimInstanceProperties["FileData"].Value;
+
+            return fileBytes;
+
+        }//end public object cimReadRemoteFile(string path, CimSession cimSession)
+
+
+       
+        static List<session> processRemoteWinSCPSessions(ManagementClass registryManipulator,
+            ManagementBaseObject methodParams, string user)
+        {
+            List<session> winScpSessions = new List<session>();
+            const string winSCPPathEnding = @"\SOFTWARE\Martin Prikryl\WinSCP 2\Sessions";
+            methodParams["sSubKeyName"] = user + winSCPPathEnding;
+
+            ManagementBaseObject exitCode = registryManipulator.InvokeMethod("EnumKey", methodParams, null);
+
+
+            if (exitCode["returnValue"].ToString() == "0")
+            {
+                string[] winScpRegistrySessions = (string[])exitCode["sNames"];
+                methodParams = registryManipulator.GetMethodParameters("GetStringValue");
+                methodParams["hDefKey"] = 2147483651;
+                string hostname = "";
+                string port = "";
+                string username = "";
+                string password = "";
+                string pvtKeyFile = "";
+                foreach (string winScpRegistrySession in winScpRegistrySessions)
+                {
+                    hostname = "";
+                    port = "";
+                    username = "";
+                    password = "";
+                    pvtKeyFile = "";
+                    if (winScpRegistrySession == "Default%20Settings")
+                    {
+                        continue;
+                    }
+                    methodParams["sSubKeyName"] = user + winSCPPathEnding + @"\" +
+                        winScpRegistrySession;
+
+                    methodParams["sValueName"] = "HostName";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        hostname = (string)exitCode["sValue"];
+                    }
+                    methodParams["sValueName"] = "UserName";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        username = (string)exitCode["sValue"];
+                    }
+                    methodParams["sValueName"] = "Password";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        password = (string)exitCode["sValue"];
+                        string encryptedPassword = password;
+                        try
+                        {
+                            password = decryptWinScpPassword(hostname, username, password);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(" *** Error decrypting WinSCP password. Saving encrypted password to output");
+                            password = encryptedPassword;
+                        }
+                    }
+                    //No idea why WinSCP saves private keys as "PublicKeyFile" in the registry
+                    methodParams["sValueName"] = "PublicKeyFile";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        pvtKeyFile = (string)exitCode["sValue"];
+                    }
+                    methodParams = registryManipulator.GetMethodParameters("GetDWORDValue");
+                    methodParams["hDefKey"] = 2147483651;
+                    methodParams["sValueName"] = "PortNumber";
+                    methodParams["sSubKeyName"] = user + winSCPPathEnding + @"\" +
+                       winScpRegistrySession;
+                    exitCode = registryManipulator.InvokeMethod("GetDWORDValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        UInt32 portInt = (UInt32)exitCode["uValue"];
+                        port = portInt.ToString();
+                    }
+                    /* //debug
+                    Console.WriteLine("\n>>> Got session <<<");
+                    Console.WriteLine("Host: " + hostname);
+                    Console.WriteLine("Port: " + port);
+                    Console.WriteLine("Username: " + username);
+                    Console.WriteLine("Password: " + password);
+                    Console.WriteLine("KeyFile: " + pvtKeyFile); 
+                    */
+
+                    winScpSessions.Add(new session(hostname, port, username, password, pvtKeyFile, "WinSCP"));
+                }//end foreach (string winScpRegistrySession in winScpRegistrySessions)
+
+            }//end  if ((string)exitCode["returnValue"] != "0")
+
+            return winScpSessions;
+        }// end static List<session> processRemoteWinSCPSessions(...
+
+        static List<session> processRemotePuttySessions(ManagementClass registryManipulator,
+           ManagementBaseObject methodParams, string user)
+        {
+            List<session> puttySessions = new List<session>();
+            const string puttyPathEnding = @"\SOFTWARE\SimonTatham\PuTTY\Sessions";
+            methodParams["sSubKeyName"] = user + puttyPathEnding;
+
+            ManagementBaseObject exitCode = registryManipulator.InvokeMethod("EnumKey", methodParams, null);
+            if (exitCode["returnValue"].ToString() == "0")
+            {
+                string[] puttyRegistrySessions = (string[])exitCode["sNames"];
+                methodParams = registryManipulator.GetMethodParameters("GetStringValue");
+                methodParams["hDefKey"] = 2147483651;
+                string hostname = "";
+                string port = "";
+                string username = "";
+                string pvtKeyFile = "";
+
+                foreach (string puttyRegistrySession in puttyRegistrySessions)
+                {
+                    hostname = "";
+                    port = "";
+                    username = "";
+                    pvtKeyFile = "";
+                    if (puttyRegistrySession == "Default%20Settings")
+                    {
+                        continue;
+                    }
+                    methodParams["sSubKeyName"] = user + puttyPathEnding + @"\" +
+                        puttyRegistrySession;
+
+                    methodParams["sValueName"] = "HostName";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        hostname = (string)exitCode["sValue"];
+                    }
+                    methodParams["sValueName"] = "UserName";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        username = (string)exitCode["sValue"];
+                    }
+                    //No idea why PuTTY saves private keys as "PublicKeyFile" in the registry
+                    methodParams["sValueName"] = "PublicKeyFile";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        pvtKeyFile = (string)exitCode["sValue"];
+                    }
+                    methodParams = registryManipulator.GetMethodParameters("GetDWORDValue");
+                    methodParams["hDefKey"] = 2147483651;
+                    methodParams["sValueName"] = "PortNumber";
+                    methodParams["sSubKeyName"] = user + puttyPathEnding + @"\" +
+                       puttyRegistrySession;
+                    exitCode = registryManipulator.InvokeMethod("GetDWORDValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        UInt32 portInt = (UInt32)exitCode["uValue"];
+                        port = portInt.ToString();
+                    }
+                    /* //debug
+                    Console.WriteLine("\n>>> Got session <<<");
+                    Console.WriteLine("Host: " + hostname);
+                    Console.WriteLine("Port: " + port);
+                    Console.WriteLine("Username: " + username);
+                    Console.WriteLine("Password: " + password);
+                    Console.WriteLine("KeyFile: " + pvtKeyFile); 
+                    */
+
+                    puttySessions.Add(new session(hostname, port, username, "", pvtKeyFile, "PuTTY"));
+                }//end foreach (string winScpRegistrySession in winScpRegistrySessions)
+
+            }// end if (exitCode["returnValue"].ToString() == "0")
+
+            return puttySessions;
+
+        }// end static List<session> processRemotePuttySessions(...
+
+        static List<session> processRemoteRdpSessions(ManagementClass registryManipulator,
+           ManagementBaseObject methodParams, string user)
+        {
+            List<session> rdpSessions = new List<session>();
+            const string rdpPathEnding = @"\SOFTWARE\Microsoft\Terminal Server Client\Servers";
+            methodParams["sSubKeyName"] = user + rdpPathEnding;
+
+            ManagementBaseObject exitCode = registryManipulator.InvokeMethod("EnumKey", methodParams, null);
+            if (exitCode["returnValue"].ToString() == "0")
+            {
+                string[] rdpRegistrySessions = (string[])exitCode["sNames"];
+                methodParams = registryManipulator.GetMethodParameters("GetStringValue");
+                methodParams["hDefKey"] = 2147483651;
+                string hostname = "";
+                string username = "";
+
+
+                foreach (string rdpRegistrySession in rdpRegistrySessions)
+                {
+                    hostname = "";
+                    username = "";
+
+                    methodParams["sSubKeyName"] = user + rdpPathEnding + @"\" +
+                        rdpRegistrySession;
+
+                    hostname = rdpRegistrySession;
+
+                    methodParams["sValueName"] = "UsernameHint";
+                    exitCode = registryManipulator.InvokeMethod("GetStringValue", methodParams, null);
+                    if (exitCode["returnValue"].ToString() == "0")
+                    {
+                        username = (string)exitCode["sValue"];
+                    }
+
+                    rdpSessions.Add(new session(hostname, "", username, "", "", "RDP"));
+                }//end foreach (string rdpRegistrySession in rdpRegistrySessions)
+
+            }// end if (exitCode["returnValue"].ToString() == "0")
+            return rdpSessions;
+
+        }// end static List<session> processRemoteRdpSessions(..
+
+        static List<session> processLocalFileZillaSessions(XElement fileZillaSettings)
+        {
+            List<session> fileZillaSessions = new List<session>();
+
+            IEnumerable<XElement> servers = from el in fileZillaSettings.Descendants("Server") select el;
+
+            foreach (XElement server in servers)
+            {
+                string hostname = (string)server.Element("Host");
+                string port = (string)server.Element("Port");
+                string username = (string)server.Element("User");
+                var passwordB64Bytes = System.Convert.FromBase64String((string)server.Element("Pass"));
+                string password = Encoding.UTF8.GetString(passwordB64Bytes);
+                fileZillaSessions.Add(new session(hostname, port, username, password, "", "FileZilla"));
+            }
+
+            return fileZillaSessions;
+        }
+
+        static List<session> processLocalSuperPuttySessions(XElement SuperPuTTYServers)
+        {
+            List<session> superPuTTYSessions = new List<session>();
+            IEnumerable<XElement> servers = from el in SuperPuTTYServers.Descendants("SessionData") select el;
+
+            Console.WriteLine(servers.Count().ToString());
+            foreach (XElement server in servers)
+            {
+                Console.WriteLine("Foo");
+                string hostname = (string)server.Attribute("Host");
+                string port = (string)server.Attribute("Port");
+                string username = (string)server.Attribute("Username");
+                superPuTTYSessions.Add(new session(hostname, port, username, "", "", "SuperPuTTY"));
+            }
+
+            return superPuTTYSessions;
+
+        }
+
+        static List<session> processLocalMRemoteNGSessions(XElement mRemoteNGServers)
+        {
+            List<session> mRemoteNGSessions = new List<session>();
+            IEnumerable<XElement> servers = from el in mRemoteNGServers.Descendants("Node") select el;
+
+            Console.WriteLine(servers.Count().ToString());
+            foreach (XElement server in servers)
+            {
+                Console.WriteLine("Foo");
+                string hostname = (string)server.Attribute("Hostname");
+                string port = (string)server.Attribute("Port");
+                string username = (string)server.Attribute("Username");
+                string password = (string)server.Attribute("Password");
+                //ToDo - write up autodecryptor. See https://github.com/gquere/mRemoteNG_password_decrypt
+                mRemoteNGSessions.Add(new session(hostname, port, username, password, "", "mRemoteNG"));
+            }
+
+            return mRemoteNGSessions;
+
+        }
+        static List<session> processLocalPuttySessions(RegistryKey puttyKey)
+        {
+            List<session> puttySessions = new List<session>();
+
+            string[] sessions = puttyKey.GetSubKeyNames();
+            if (sessions.Length == 0)
+            {
+                return puttySessions;
+            }
+            foreach (string session in sessions)
+            {
+                //debug
+                //Console.WriteLine("Session: " + session);
+                string hostname;
+                string port;
+                string username;
+                string pvtKeyFile;
+
+                using (RegistryKey sessionKey = puttyKey.OpenSubKey(session))
+                {
+
+                    hostname = sessionKey.GetValue("HostName", "none").ToString();
+                    port = sessionKey.GetValue("PortNumber", "none").ToString();
+                    username = sessionKey.GetValue("UserName", "none").ToString();
+                    // for reasons I do not understand, PuTTY stores the private key filename under "PublicKeyFile"                
+                    pvtKeyFile = sessionKey.GetValue("PublicKeyFile", "none").ToString();
+                }
+                //debug
+                //Console.WriteLine("hostname: " + hostname + " username: " + username + " PKF: " + pvtKeyFile);
+
+                puttySessions.Add(new session(hostname, port, username, "", pvtKeyFile, "PuTTY"));
+                //debug
+                //session foo = new session(hostname, username, "", pvtKeyFile, "PuTTY");
+                //puttySessions.Add(foo);
+                //Console.WriteLine(foo.ToString());
+                //debug 
+                //Console.WriteLine("# PuttySessions: " + puttySessions.Count.ToString());
+                //  puttySessions.Append(new session() { remoteHost = hostname, username = username, password = "", pvtKeyFile = pvtKeyFile, source = "PuTTY" });
+
+            }// end foreach(session in sessions)
+            //debug 
+            Console.WriteLine("# PuttySessions: " + puttySessions.Count.ToString());
+            return puttySessions;
+        } // end void processPuttySessions(RegistryKey puttyKey)
+
+        static List<session> processLocalWinScpSessions(RegistryKey winSCPKey)
+        {
+            List<session> winScpSessions = new List<session>();
+
+            string[] sessions = winSCPKey.GetSubKeyNames();
+            if (sessions.Length == 0)
+            {
+                return winScpSessions;
+            }
+            foreach (string session in sessions)
+            {
+                string hostname;
+                string port;
+                string username;
+                string password;
+                string pvtKeyFile;
+                using (RegistryKey sessionKey = winSCPKey.OpenSubKey(session))
+                {
+                    //debug
+                    //Console.WriteLine("WinSCP Session: " + session);
+
+                    hostname = sessionKey.GetValue("HostName", "none").ToString();
+                    port = sessionKey.GetValue("PortNumber", "none").ToString();
+                    username = sessionKey.GetValue("UserName", "none").ToString();
+                    password = sessionKey.GetValue("Password", "none").ToString();
+                    // for reasons I do not understand, WinSCP stores the private key filename under "PublicKeyFile"                
+                    pvtKeyFile = sessionKey.GetValue("PublicKeyFile", "none").ToString();
+
+                    if (password != "none")
+                    {
+                        password = decryptWinScpPassword(hostname, username, password);
+                    }
+                }
+                winScpSessions.Add(new session(hostname, port, username, password, pvtKeyFile, "WinSCP"));
+            }// end foreach (string session in sessions)
+            //debug 
+            //Console.WriteLine("# WinSCP Sessions: " + winScpSessions.Count.ToString());
+            return winScpSessions;
+        }// end void processWinScpSessions(RegistryKey winSCPKey)
+
+        static List<session> processLocalRdpSessions(RegistryKey rdpKey)
+        {
+            List<session> rdpSessions = new List<session>();
+
+            string[] sessions = rdpKey.GetSubKeyNames();
+            if (sessions.Length == 0)
+            {
+                return rdpSessions;
+            }
+            foreach (string session in sessions)
+            {
+                string username;
+                using (RegistryKey sessionKey = rdpKey.OpenSubKey(session))
+                {
+                    username = sessionKey.GetValue("UsernameHint", "none").ToString();
+                }
+                rdpSessions.Add(new session(session, "", username, "", "", "RDP"));
+            }// end foreach string(session in sessions)
+
+            return rdpSessions;
+        } // end void processLocalRdpSessions
+
+        static winScpDecryption decryptNextCharacterWinSCP(string remainingCipherText)
+        {
+            int firstVal = "0123456789ABCDEF".IndexOf(remainingCipherText[0]) * 16;
+            int secondVal = "0123456789ABCDEF".IndexOf(remainingCipherText[1]);
+
+            uint magic = 163;
+            uint added = ((uint)(firstVal + secondVal));
+
+            uint decryptedResult = (((~(added ^ magic)) % 256) + 256) % 256;
+
+            return new winScpDecryption(remainingCipherText.Substring(2), decryptedResult);
+
+        }// end static winScpDecryption decryptNextCharacterWinSCP(string remainingCipherText)
+        static string decryptWinScpPassword(string hostname, string username, string cipherText)
+        {
+            uint checkFlag = 255;
+            winScpDecryption intermediateResults;
+
+            uint len = 0;
+            string key = hostname + username;
+            intermediateResults = decryptNextCharacterWinSCP(cipherText);
+            uint storedFlag = intermediateResults.decryptedResult;
+
+
+            if (storedFlag == checkFlag)
+            {
+                intermediateResults.remainingCipherText = intermediateResults.remainingCipherText.Substring(2);
+                intermediateResults = decryptNextCharacterWinSCP(intermediateResults.remainingCipherText);
+            }
+
+            len = intermediateResults.decryptedResult;
+
+            intermediateResults = decryptNextCharacterWinSCP(intermediateResults.remainingCipherText);
+            intermediateResults.remainingCipherText = intermediateResults.remainingCipherText.Substring(((int)intermediateResults.decryptedResult * 2));
+
+            string finalOutput = "";
+            for (int i = 0; i < len; i++)
+            {
+                intermediateResults = decryptNextCharacterWinSCP(intermediateResults.remainingCipherText);
+                finalOutput += (char)intermediateResults.decryptedResult;
+            }//end for (int i = 0; i < len; i++)
+
+            if (storedFlag == checkFlag)
+            {
+                return finalOutput.Substring(key.Length);
+            }
+
+            return finalOutput;
+        }// end  static string decryptWinScpPassword(string hash)
+
+     
+
+    }//internal class Program
+
+}//end namespace FieldWalker
+
