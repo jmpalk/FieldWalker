@@ -535,13 +535,8 @@ namespace FieldWalker
                     //now we look for file-based credentials
                     string FileZillaPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\FileZilla\\sitemanager.xml";
                     string SuperPuTTYPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\Documents\\SuperPuTTY\\Sessions.xml";
-                    string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";
-                    
-                    
-
-                    //debug 
-                    Console.WriteLine("FileZilla path: " + FileZillaPath);
-                    Console.WriteLine("SuperPuTTY Path: " + SuperPuTTYPath);
+                    string mRemoteNGPath = "C:\\Users\\" + accountName.Split('\\')[1] + "\\AppData\\Roaming\\mRemoteNG\\confCons.xml";                                      
+                   
                     if (File.Exists(FileZillaPath))
                     {
                         //debug
